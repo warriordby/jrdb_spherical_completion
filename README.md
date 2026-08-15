@@ -152,5 +152,3 @@ The current workspace contains JRDB test images without MOT ground truth. Center
 ## Known upstream limitation
 
 The pinned Seen-to-Scene repository describes RAFT, ProPainter flow completion, and a self-trained UNet/latent-refinement model, but does not publish its `checkpoint-100000`. This project therefore prepares its public RAFT and flow-completion components and ports reference conditioning, overlap locking, and latent-noise propagation into the VACE wrapper. The resource manifest records the missing checkpoint explicitly rather than fabricating an official asset.
-
-The current disk capacity does not meet the 150 GiB free-space requirement for full production. Even after model weights and environments are prepared, storage must be expanded before generating all 27,661 frames.
