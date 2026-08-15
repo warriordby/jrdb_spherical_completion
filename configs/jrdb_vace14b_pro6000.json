@@ -1,0 +1,76 @@
+{
+  "input_root": "/root/autodl-tmp/JRDB2019-MOT",
+  "output_root": "/root/autodl-tmp/datasets/JRDB-Spherical-VFOV180-VACE",
+  "cache_root": "/root/autodl-tmp/model_cache_v2",
+  "resources_manifest": "/root/autodl-tmp/model_cache_v2/resources_manifest_v2.json",
+  "geometry": {
+    "input_width": 3760,
+    "input_height": 480,
+    "output_width": 3760,
+    "output_height": 720,
+    "proxy_width": 1440,
+    "proxy_height": 720,
+    "north_latitude": 60.0,
+    "south_latitude": -60.0
+  },
+  "generation": {
+    "backend": "vace14b",
+    "model": "Wan-AI/Wan2.1-VACE-14B",
+    "model_revision": "539c162b1387eac9dc4c20bd3f74671309e76a4c",
+    "checkpoint_dir": "/root/autodl-tmp/model_cache_v2/models/Wan2.1-VACE-14B",
+    "vace_source": "/root/autodl-tmp/model_cache_v2/sources/VACE",
+    "vace_commit": "48eb44f1c4be87cc65a98bff985a26976841e9f3",
+    "vace_python": "/root/autodl-tmp/jrdb_spherical_completion/.venv-vace/bin/python",
+    "window_frames": 81,
+    "window_overlap": 17,
+    "reference_frames": 3,
+    "seed": 3407,
+    "sample_solver": "unipc",
+    "sample_steps": 50,
+    "sample_shift": 16.0,
+    "guidance_scale": 5.0,
+    "offload_model": true,
+    "t5_cpu": false,
+    "seam_repair": true,
+    "prompt": "Photorealistic continuation of only the missing polar bands in the same fixed 360-degree scene. Extend existing sky, ceiling, wall, floor, ground, lighting and reflections with stable geometry across time. Do not add or duplicate people, body parts, animals, vehicles, furniture, objects, text, logos, signs or watermarks. Preserve all observed pixels and identities exactly; keep the camera and scene structure unchanged."
+  },
+  "temporal": {
+    "overlap_noise_reuse": true,
+    "overlap_condition_lock": true,
+    "reference_selection": "structural_similarity",
+    "flow_backend": "raft_large",
+    "flow_completion": "propainter_recurrent",
+    "forward_backward_consistency": true
+  },
+  "quality": {
+    "representative_sequences": [
+      "cubberly-auditorium-2019-04-22_1",
+      "discovery-walk-2019-02-28_0",
+      "indoor-coupa-cafe-2019-02-06_0"
+    ],
+    "person_detector": "torchvision/fasterrcnn_resnet50_fpn_v2_coco",
+    "detector_checkpoint": "/root/autodl-tmp/model_cache_v2/quality/fasterrcnn_resnet50_fpn_v2_coco-dd69338a.pth",
+    "person_score_threshold": 0.7,
+    "reid_model": "osnet_x1_0",
+    "reid_source": "/root/autodl-tmp/model_cache_v2/sources/deep-person-reid",
+    "reid_checkpoint": "/root/autodl-tmp/model_cache_v2/quality/osnet_x1_0_imagenet.pth",
+    "raft_checkpoint": "/root/autodl-tmp/model_cache_v2/torch/hub/checkpoints/raft_large_C_T_SKHT_V2-ff5fadd5.pth",
+    "flow_completion_checkpoint": "/root/autodl-tmp/model_cache_v2/quality/recurrent_flow_completion.pth",
+    "trackeval_source": "/root/autodl-tmp/model_cache_v2/sources/TrackEval",
+    "mot_ground_truth": null,
+    "seam_ratio_limit": 2.0,
+    "reid_cosine_p95_limit": 0.05,
+    "temporal_warp_p95_ratio_limit": 1.25,
+    "mot_metric_drop_points_limit": 1.0,
+    "person_recall_relative_limit": 0.01
+  },
+  "output": {
+    "png_compress_level": 4,
+    "mot_view": true,
+    "fps": 15
+  },
+  "production": {
+    "minimum_free_gib": 150,
+    "allow_full_run_only_after_quality_gate": true
+  }
+}

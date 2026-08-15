@@ -1,0 +1,97 @@
+diff --git a/vace/models/wan/wan_vace.py b/vace/models/wan/wan_vace.py
+--- a/vace/models/wan/wan_vace.py
++++ b/vace/models/wan/wan_vace.py
+@@ -191,6 +191,14 @@ class WanVace(WanT2V):
+     def vace_latent(self, z, m):
+         return [torch.cat([zz, mm], dim=0) for zz, mm in zip(z, m)]
+ 
++    def move_vae(self, device):
++        device = torch.device(device)
++        self.vae.model.to(device)
++        self.vae.mean = self.vae.mean.to(device)
++        self.vae.std = self.vae.std.to(device)
++        self.vae.scale = [self.vae.mean, 1.0 / self.vae.std]
++        self.vae.device = device
++
+     def prepare_source(self, src_video, src_mask, src_ref_images, num_frames, image_size, device):
+         area = image_size[0] * image_size[1]
+         downsample = tuple([x * y for x, y in zip(self.vae_stride, self.patch_size)])
+@@ -347,6 +355,18 @@ class WanVace(WanT2V):
+ 
+         target_shape = list(z0[0].shape)
+         target_shape[0] = int(target_shape[0] / 2)
++        del z0, m0
++        if offload_model:
++            logging.info("Offloading VAE and encoded source tensors before DiT sampling.")
++            self.move_vae(torch.device('cpu'))
++            input_frames[:] = [tensor.cpu() for tensor in input_frames]
++            input_masks[:] = [tensor.cpu() for tensor in input_masks]
++            input_ref_images[:] = [
++                None if refs is None else [tensor.cpu() for tensor in refs]
++                for refs in input_ref_images
++            ]
++            gc.collect()
++            torch.cuda.empty_cache()
+         noise = [
+             torch.randn(
+                 target_shape[0],
+@@ -446,6 +466,7 @@ class WanVace(WanT2V):
+             if offload_model:
+                 self.model.cpu()
+                 torch.cuda.empty_cache()
++                self.move_vae(self.device)
+             if self.rank == 0:
+                 videos = self.decode_latent(x0, input_ref_images)
+ 
+diff --git a/vace/models/wan/modules/model.py b/vace/models/wan/modules/model.py
+--- a/vace/models/wan/modules/model.py
++++ b/vace/models/wan/modules/model.py
+@@ -34,14 +34,13 @@ class VaceWanAttentionBlock(WanAttentionBlock):
+         if self.block_id == 0:
+             c = self.before_proj(c) + x
+             all_c = []
+         else:
+-            all_c = list(torch.unbind(c))
++            all_c = list(c)
+             c = all_c.pop(-1)
+         c = super().forward(c, **kwargs)
+         c_skip = self.after_proj(c)
+-        all_c += [c_skip, c]
+-        c = torch.stack(all_c)
+-        return c
++        all_c += [c_skip.cpu(), c]
++        return tuple(all_c)
+     
+     
+ class BaseWanAttentionBlock(WanAttentionBlock):
+@@ -63,7 +62,8 @@ class BaseWanAttentionBlock(WanAttentionBlock):
+     def forward(self, x, hints, context_scale=1.0, **kwargs):
+         x = super().forward(x, **kwargs)
+         if self.block_id is not None:
+-            x = x + hints[self.block_id] * context_scale
++            hint = hints[self.block_id].to(device=x.device, dtype=x.dtype)
++            x = x + hint * context_scale
+         return x
+     
+     
+@@ -138,7 +138,7 @@ class VaceWanModel(WanModel):
+ 
+         for block in self.vace_blocks:
+             c = block(c, **new_kwargs)
+-        hints = torch.unbind(c)[:-1]
++        hints = c[:-1]
+         return hints
+ 
+     def forward(
+diff --git a/vace/models/wan/distributed/xdit_context_parallel.py b/vace/models/wan/distributed/xdit_context_parallel.py
+--- a/vace/models/wan/distributed/xdit_context_parallel.py
++++ b/vace/models/wan/distributed/xdit_context_parallel.py
+@@ -90,7 +90,7 @@ def usp_dit_forward_vace(
+ 
+     for block in self.vace_blocks:
+         c = block(c, **new_kwargs)
+-    hints = torch.unbind(c)[:-1]
++    hints = c[:-1]
+     return hints
+ 
+ 

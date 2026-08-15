@@ -1,0 +1,69 @@
+diff --git a/pyproject.toml b/pyproject.toml
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -18,6 +18,6 @@ dependencies = [
+     "torch>=2.4.0",
+     "torchvision>=0.19.0",
+-    "opencv-python>=4.9.0.80",
++    "opencv-python-headless>=4.9.0.80",
+     "diffusers>=0.31.0",
+     "transformers>=4.49.0",
+     "tokenizers>=0.20.3",
+@@ -28,8 +28,5 @@ dependencies = [
+     "easydict",
+     "ftfy",
+-    "dashscope",
+     "imageio-ffmpeg",
+-    "flash_attn",
+-    "gradio>=5.0.0",
+     "numpy>=1.23.5,<2"
+ ]
+diff --git a/wan/modules/model.py b/wan/modules/model.py
+--- a/wan/modules/model.py
++++ b/wan/modules/model.py
+@@ -46,28 +46,34 @@ def rope_apply(x, grid_sizes, freqs):
+     # split freqs
+     freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
+ 
+-    # loop over samples
+-    output = []
++    # RoPE is elementwise over tokens. Chunk the float64 intermediate so the
++    # full-resolution sequence does not require two multi-GiB temporaries.
++    output_dtype = torch.bfloat16
++    output = torch.empty_like(x, dtype=output_dtype)
++    chunk_size = 16384
+     for i, (f, h, w) in enumerate(grid_sizes.tolist()):
+         seq_len = f * h * w
+ 
+         # precompute multipliers
+-        x_i = torch.view_as_complex(x[i, :seq_len].to(torch.float64).reshape(
+-            seq_len, n, -1, 2))
+         freqs_i = torch.cat([
+             freqs[0][:f].view(f, 1, 1, -1).expand(f, h, w, -1),
+             freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
+             freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
+         ],
+                             dim=-1).reshape(seq_len, 1, -1)
+ 
+-        # apply rotary embedding
+-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
+-        x_i = torch.cat([x_i, x[i, seq_len:]])
+-
+-        # append to collection
+-        output.append(x_i)
+-    return torch.stack(output).float()
++        # FlashAttention consumes q/k in the input half dtype. Preserve the
++        # original float64 -> float32 -> half rounding path for every value.
++        for start in range(0, seq_len, chunk_size):
++            end = min(start + chunk_size, seq_len)
++            x_i = torch.view_as_complex(
++                x[i, start:end].to(torch.float64).reshape(end - start, n, -1, 2)
++            )
++            x_i = torch.view_as_real(x_i * freqs_i[start:end]).flatten(2)
++            output[i, start:end].copy_(x_i.float().to(output_dtype))
++        if seq_len < x.size(1):
++            output[i, seq_len:].copy_(x[i, seq_len:])
++    return output
+ 
+ 
+ class WanRMSNorm(nn.Module):

@@ -1,0 +1,34 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.venv/
+.venv-*/
+
+# Packaging and test artifacts
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Local datasets, model weights, and run outputs
+datasets/
+model_cache*/
+outputs/
+checkpoints/
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.incomplete
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.tmp
+*.log

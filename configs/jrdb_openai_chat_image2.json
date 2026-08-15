@@ -1,0 +1,20 @@
+{
+  "input_root": "/root/autodl-tmp/JRDB2019-MOT",
+  "output_root": "/root/autodl-tmp/datasets/JRDB-Spherical-VFOV180-OpenAIChatImage2",
+  "cache_root": "/root/autodl-tmp/model_cache",
+  "geometry": {"input_width": 3760, "input_height": 480, "output_height": 720, "top_rows": 120},
+  "generation": {
+    "backend": "openai_chat_image2",
+    "model": "gpt-image-2",
+    "use_codex_provider": true,
+    "codex_config": "/root/.codex/config.toml",
+    "api_mode": "json_images_edits",
+    "api_size": "1024x1024",
+    "prompt": "The first image is the current equirectangular panorama to extend vertically; the second image is its edit mask, where transparent pixels are the missing region. If a third image is supplied, it is the previous completed video keyframe and must be used only for temporal consistency of the ceiling, floor, lighting and textures. Fill only the missing 30 degree ceiling and 30 degree floor bands. Preserve the observed band exactly. Continue architecture, lighting, perspective, materials and reflections; do not add, remove or alter people, vehicles, signs or objects. Return a seamless 360 degree equirectangular frame suitable for multi-object tracking.",
+    "tile_width": 1024, "tile_overlap": 256, "per_tile_seed": false,
+    "previous_keyframe_reference": true, "api_timeout": 90, "api_retries": 3,
+    "seed": 3407, "keyframe_stride": 2
+  },
+  "temporal": {"enabled": true, "raft_model": "raft_large", "circular_pad": 128, "propagation_blend": 0.82},
+  "output": {"png_compress_level": 4, "mot_view": true, "fps": 15}
+}

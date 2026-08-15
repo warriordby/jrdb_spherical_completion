@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jrdb-spherical-completion"
+version = "0.2.0"
+description = "Temporally consistent spherical outpainting for JRDB MOT sequences"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.26,<2.3",
+  "opencv-python-headless>=4.10,<5",
+  "Pillow>=10,<13",
+]
+
+[project.optional-dependencies]
+download = ["gdown>=5.2,<6", "huggingface-hub>=0.34,<1"]
+quality = ["scipy>=1.13,<2", "yacs>=0.1.8,<1"]
+test = ["pytest>=8,<9"]
+
+[project.scripts]
+jrdb-sphere = "jrdb_sphere.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

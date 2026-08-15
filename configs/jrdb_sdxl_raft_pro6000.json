@@ -1,0 +1,40 @@
+{
+  "input_root": "/root/autodl-tmp/JRDB2019-MOT",
+  "output_root": "/root/autodl-tmp/datasets/JRDB-Spherical-VFOV180",
+  "cache_root": "/root/autodl-tmp/model_cache",
+  "geometry": {
+    "input_width": 3760,
+    "input_height": 480,
+    "output_height": 720,
+    "top_rows": 120
+  },
+  "generation": {
+    "backend": "sdxl_ip",
+    "model": "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
+    "ip_adapter": "h94/IP-Adapter",
+    "ip_adapter_subfolder": "sdxl_models",
+    "ip_adapter_weight": "ip-adapter-plus_sdxl_vit-h.safetensors",
+    "prompt": "photorealistic continuation of the same panoramic camera scene, coherent ceiling or sky above and floor or ground below, natural perspective, no people added",
+    "negative_prompt": "text, watermark, duplicate person, new person, stretched object, fisheye discontinuity, seam, frame, border",
+    "tile_width": 1024,
+    "tile_overlap": 256,
+    "steps": 35,
+    "guidance_scale": 5.0,
+    "strength": 1.0,
+    "seed": 3407,
+    "keyframe_stride": 5,
+    "ip_adapter_scale": 0.65
+  },
+  "temporal": {
+    "enabled": true,
+    "raft_model": "raft_large",
+    "circular_pad": 128,
+    "propagation_blend": 0.82
+  },
+  "output": {
+    "png_compress_level": 4,
+    "mot_view": true,
+    "fps": 15
+  }
+}
+

@@ -1,0 +1,250 @@
+diff --git a/vace/models/wan/wan_vace.py b/vace/models/wan/wan_vace.py
+index d388c50..f3d4c50 100644
+--- a/vace/models/wan/wan_vace.py
++++ b/vace/models/wan/wan_vace.py
+@@ -191,15 +191,25 @@ class WanVace(WanT2V):
+     def vace_latent(self, z, m):
+         return [torch.cat([zz, mm], dim=0) for zz, mm in zip(z, m)]
+ 
++    def move_vae(self, device):
++        device = torch.device(device)
++        self.vae.model.to(device)
++        self.vae.mean = self.vae.mean.to(device)
++        self.vae.std = self.vae.std.to(device)
++        self.vae.scale = [self.vae.mean, 1.0 / self.vae.std]
++        self.vae.device = device
++
+     def prepare_source(self, src_video, src_mask, src_ref_images, num_frames, image_size, device):
+         area = image_size[0] * image_size[1]
++        downsample = tuple([x * y for x, y in zip(self.vae_stride, self.patch_size)])
++        if image_size[0] % downsample[2] or image_size[1] % downsample[1]:
++            raise ValueError(
++                f"image_size {image_size} must be divisible by spatial downsample {downsample[1:]}"
++            )
+         self.vid_proc.set_area(area)
+-        if area == 720*1280:
+-            self.vid_proc.set_seq_len(75600)
+-        elif area == 480*832:
+-            self.vid_proc.set_seq_len(32760)
+-        else:
+-            raise NotImplementedError(f'image_size {image_size} is not supported')
++        latent_frames = (num_frames - 1) // self.vae_stride[0] + 1
++        spatial_tokens = (image_size[1] // downsample[1]) * (image_size[0] // downsample[2])
++        self.vid_proc.set_seq_len(latent_frames * spatial_tokens)
+ 
+         image_size = (image_size[1], image_size[0])
+         image_sizes = []
+@@ -273,7 +275,10 @@ class WanVace(WanT2V):
+                  guide_scale=5.0,
+                  n_prompt="",
+                  seed=-1,
+-                 offload_model=True):
++                 offload_model=True,
++                 noise_overlap_in=None,
++                 noise_overlap_latent_frames=0,
++                 noise_out=None):
+         r"""
+         Generates video frames from text prompt using diffusion process.
+ 
+@@ -342,6 +355,18 @@ class WanVace(WanT2V):
+ 
+         target_shape = list(z0[0].shape)
+         target_shape[0] = int(target_shape[0] / 2)
++        del z0, m0
++        if offload_model:
++            logging.info("Offloading VAE and encoded source tensors before DiT sampling.")
++            self.move_vae(torch.device('cpu'))
++            input_frames[:] = [tensor.cpu() for tensor in input_frames]
++            input_masks[:] = [tensor.cpu() for tensor in input_masks]
++            input_ref_images[:] = [
++                None if refs is None else [tensor.cpu() for tensor in refs]
++                for refs in input_ref_images
++            ]
++            gc.collect()
++            torch.cuda.empty_cache()
+         noise = [
+             torch.randn(
+                 target_shape[0],
+@@ -352,6 +377,28 @@ class WanVace(WanT2V):
+                 device=self.device,
+                 generator=seed_g)
+         ]
++        if noise_overlap_in:
++            previous_noise = torch.load(noise_overlap_in, map_location=self.device, weights_only=True)
++            overlap = int(noise_overlap_latent_frames)
++            if overlap <= 0:
++                raise ValueError("noise_overlap_latent_frames must be positive with noise_overlap_in")
++            if previous_noise.shape[0] != noise[0].shape[0] or previous_noise.shape[2:] != noise[0].shape[2:]:
++                raise ValueError(
++                    f"noise overlap shape mismatch: previous={tuple(previous_noise.shape)}, current={tuple(noise[0].shape)}"
++                )
++            if overlap > previous_noise.shape[1] or overlap > noise[0].shape[1]:
++                raise ValueError("noise overlap is longer than the latent window")
++            current_ref_count = len(input_ref_images[0]) if input_ref_images[0] is not None else 0
++            if current_ref_count + overlap > noise[0].shape[1]:
++                raise ValueError("reference prefix plus overlap exceeds current latent window")
++            noise[0][:, current_ref_count:current_ref_count + overlap].copy_(
++                previous_noise[:, -overlap:].to(noise[0])
++            )
++        if noise_out and self.rank == 0:
++            os.makedirs(os.path.dirname(os.path.abspath(noise_out)), exist_ok=True)
++            temporary_noise = noise_out + f".tmp-{os.getpid()}"
++            torch.save(noise[0].detach().cpu(), temporary_noise)
++            os.replace(temporary_noise, noise_out)
+         seq_len = math.ceil((target_shape[2] * target_shape[3]) /
+                             (self.patch_size[1] * self.patch_size[2]) *
+                             target_shape[1] / self.sp_size) * self.sp_size
+@@ -419,6 +466,7 @@ class WanVace(WanT2V):
+             if offload_model:
+                 self.model.cpu()
+                 torch.cuda.empty_cache()
++                self.move_vae(self.device)
+             if self.rank == 0:
+                 videos = self.decode_latent(x0, input_ref_images)
+ 
+diff --git a/vace/vace_wan_inference.py b/vace/vace_wan_inference.py
+index 11488bd..48aa7b8 100644
+--- a/vace/vace_wan_inference.py
++++ b/vace/vace_wan_inference.py
+@@ -17,7 +17,6 @@ from wan.utils.utils import cache_video, cache_image, str2bool
+ 
+ from models.wan import WanVace
+ from models.wan.configs import WAN_CONFIGS, SIZE_CONFIGS, MAX_AREA_CONFIGS, SUPPORTED_SIZES
+-from annotators.utils import get_annotator
+ 
+ EXAMPLE_PROMPT = {
+     "vace-1.3B": {
+@@ -56,8 +56,13 @@ def validate_args(args):
+     args.base_seed = args.base_seed if args.base_seed >= 0 else random.randint(
+         0, sys.maxsize)
+     # Size check
+-    assert args.size in SUPPORTED_SIZES[
+-        args.model_name], f"Unsupport size {args.size} for model name {args.model_name}, supported sizes are: {', '.join(SUPPORTED_SIZES[args.model_name])}"
++    if (args.width is None) != (args.height is None):
++        raise ValueError("--width and --height must be specified together")
++    if args.width is None:
++        assert args.size in SUPPORTED_SIZES[
++            args.model_name], f"Unsupport size {args.size} for model name {args.model_name}, supported sizes are: {', '.join(SUPPORTED_SIZES[args.model_name])}"
++    elif args.width % 16 or args.height % 16:
++        raise ValueError("custom VACE width and height must be divisible by 16")
+     return args
+ 
+ 
+@@ -84,6 +89,10 @@ def get_parser():
+         default=81,
+         help="How many frames to sample from a image or video. The number should be 4n+1"
+     )
++    parser.add_argument("--width", type=int, default=None,
++                        help="Exact output width; must be used together with --height.")
++    parser.add_argument("--height", type=int, default=None,
++                        help="Exact output height; must be used together with --width.")
+     parser.add_argument(
+         "--ckpt_dir",
+         type=str,
+@@ -178,6 +187,12 @@ def get_parser():
+         type=float,
+         default=5.0,
+         help="Classifier free guidance scale.")
++    parser.add_argument("--noise_overlap_in", type=str, default=None,
++                        help="Previous window noise tensor whose tail is reused.")
++    parser.add_argument("--noise_overlap_latent_frames", type=int, default=0,
++                        help="Number of latent frames copied from previous tail to current head.")
++    parser.add_argument("--noise_out", type=str, default=None,
++                        help="Save this window's deterministic initial noise tensor.")
+     return parser
+ 
+ 
+@@ -236,6 +251,7 @@ def main(args):
+         )
+ 
+     if args.use_prompt_extend and args.use_prompt_extend != 'plain':
++        from annotators.utils import get_annotator
+         prompt_expander = get_annotator(config_type='prompt', config_task=args.use_prompt_extend, return_dict=False)
+ 
+     cfg = WAN_CONFIGS[args.model_name]
+@@ -282,10 +297,12 @@ def main(args):
+         t5_cpu=args.t5_cpu,
+     )
+ 
++    target_size = ((args.width, args.height) if args.width is not None
++                   else SIZE_CONFIGS[args.size])
+     src_video, src_mask, src_ref_images = wan_vace.prepare_source([args.src_video],
+                                                                   [args.src_mask],
+                                                                   [None if args.src_ref_images is None else args.src_ref_images.split(',')],
+-                                                                  args.frame_num, SIZE_CONFIGS[args.size], device)
++                                                                  args.frame_num, target_size, device)
+ 
+     logging.info(f"Generating video...")
+     video = wan_vace.generate(
+@@ -293,14 +310,17 @@ def main(args):
+         src_video,
+         src_mask,
+         src_ref_images,
+-        size=SIZE_CONFIGS[args.size],
++        size=target_size,
+         frame_num=args.frame_num,
+         shift=args.sample_shift,
+         sample_solver=args.sample_solver,
+         sampling_steps=args.sample_steps,
+         guide_scale=args.sample_guide_scale,
+         seed=args.base_seed,
+-        offload_model=args.offload_model)
++        offload_model=args.offload_model,
++        noise_overlap_in=args.noise_overlap_in,
++        noise_overlap_latent_frames=args.noise_overlap_latent_frames,
++        noise_out=args.noise_out)
+ 
+     ret_data = {}
+     if rank == 0:
+diff --git a/vace/models/wan/modules/model.py b/vace/models/wan/modules/model.py
+--- a/vace/models/wan/modules/model.py
++++ b/vace/models/wan/modules/model.py
+@@ -34,14 +34,13 @@ class VaceWanAttentionBlock(WanAttentionBlock):
+         if self.block_id == 0:
+             c = self.before_proj(c) + x
+             all_c = []
+         else:
+-            all_c = list(torch.unbind(c))
++            all_c = list(c)
+             c = all_c.pop(-1)
+         c = super().forward(c, **kwargs)
+         c_skip = self.after_proj(c)
+-        all_c += [c_skip, c]
+-        c = torch.stack(all_c)
+-        return c
++        all_c += [c_skip.cpu(), c]
++        return tuple(all_c)
+     
+     
+ class BaseWanAttentionBlock(WanAttentionBlock):
+@@ -63,7 +62,8 @@ class BaseWanAttentionBlock(WanAttentionBlock):
+     def forward(self, x, hints, context_scale=1.0, **kwargs):
+         x = super().forward(x, **kwargs)
+         if self.block_id is not None:
+-            x = x + hints[self.block_id] * context_scale
++            hint = hints[self.block_id].to(device=x.device, dtype=x.dtype)
++            x = x + hint * context_scale
+         return x
+     
+     
+@@ -138,7 +138,7 @@ class VaceWanModel(WanModel):
+ 
+         for block in self.vace_blocks:
+             c = block(c, **new_kwargs)
+-        hints = torch.unbind(c)[:-1]
++        hints = c[:-1]
+         return hints
+ 
+     def forward(
+diff --git a/vace/models/wan/distributed/xdit_context_parallel.py b/vace/models/wan/distributed/xdit_context_parallel.py
+--- a/vace/models/wan/distributed/xdit_context_parallel.py
++++ b/vace/models/wan/distributed/xdit_context_parallel.py
+@@ -90,7 +90,7 @@ def usp_dit_forward_vace(
+ 
+     for block in self.vace_blocks:
+         c = block(c, **new_kwargs)
+-    hints = torch.unbind(c)[:-1]
++    hints = c[:-1]
+     return hints
+ 
+ 
